@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>汇报实时评分系统</title>
+    
+    <!-- 1. 样式库 Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    
+    <!-- 2. React 核心库 (稳定源) -->
+    <script crossorigin src="https://cdn.jsdelivr.net/npm/react@18.2.0/umd/react.production.min.js"></script>
+    <script crossorigin src="https://cdn.jsdelivr.net/npm/react-dom@18.2.0/umd/react-dom.production.min.js"></script>
+    
+    <!-- 3. Recharts 图表库依赖 (稳定源) -->
+    <script src="https://cdn.jsdelivr.net/npm/prop-types@15.8.1/prop-types.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/recharts@2.10.3/umd/Recharts.min.js"></script>
+
+    <!-- 4. Babel 编译器 -->
+    <script src="https://cdn.jsdelivr.net/npm/@babel/standalone/babel.min.js"></script>
+
+    <!-- 5. 🔥 Firebase SDK (核心：实时数据库) -->
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-firestore-compat.js"></script>
+
+    <style>
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+        .animate-fade-in { animation: fadeIn 0.5s ease-out forwards; }
+        body { background-color: #0f172a; }
+        /* 手机端优化 */
+        .mobile-card { @apply bg-slate-800 rounded-xl border border-slate-700 p-4 mb-4 shadow-lg; }
+    </style>
+</head>
+<body>
+    <div id="root"></div>
+
+    <script type="text/babel">
+        // =================================================================
+        // 🔥 已配置好的 Firebase 信息
+        // =================================================================
+        const firebaseConfig = {
+            apiKey: "AIzaSyAhAh73t3JnP9RnwJcGVUQsFyCONWmTG3k",
+            authDomain: "lecture-data-show-up.firebaseapp.com",
+            projectId: "lecture-data-show-up",
+            storageBucket: "lecture-data-show-up.firebasestorage.app",
+            messagingSenderId: "11148591202",
+            appId: "1:11148591202:web:39fed27ca8d0e35e51513b"
+        };
+
+        // --- 初始化 Firebase ---
+        let db = null;
+        let isFirebaseReady = false;
+        try {
+            if (firebaseConfig.apiKey) {
+                firebase.initializeApp(firebaseConfig);
+                db = firebase.firestore();
+                isFirebaseReady = true;
+                console.log("Firebase 连接成功！");
+            } else {
+                console.warn("未检测到 Firebase 配置");
+            }
+        } catch (e) {
+            console.error("Firebase 初始化失败:", e);
+        }
+
+        // --- 安全加载图表库 ---
+        const Recharts = window.Recharts;
+        const { useState, useEffect, useMemo } = React;
+        const { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell } = Recharts || {};
+
+        // --- 图标组件 ---
+        const Icons = {
+            Trophy: () => <svg className="w-12 h-12 text-yellow-400 mx-auto mb-2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M6 9H4.5a2.5 2.5 0 0 1 0-5H6"/><path d="M18 9h1.5a2.5 2.5 0 0 0 0-5H18"/><path d="M4 22h16"/><path d="M10 14.66V17c0 .55-.47.98-.97 1.21C7.85 18.75 7 20.24 7 22"/><path d="M14 14.66V17c0 .55.47.98.97 1.21C16.15 18.75 17 20.24 17 22"/><path d="M18 2H6v7a6 6 0 0 0 12 0V2Z"/></svg>,
+            Cloud: () => <svg className="w-5 h-5 mr-2" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 14.899A7 7 0 1 1 15.71 8h1.79a4.5 4.5 0 0 1 2.5 8.242"/><path d="M12 12v9"/><path d="m16 16-4-4-4 4"/></svg>,
+            Check: () => <svg className="w-4 h-4 mr-1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg>,
+            Lock: () => <svg className="w-4 h-4 mr-1" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>,
+            Alert: () => <svg className="w-12 h-12 text-red-500 mx-auto mb-4" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><circle cx="12" cy="12" r="10"/><line x1="12" y1="8" x2="12" y2="12"/><line x1="12" y1="16" x2="12.01" y2="16"/></svg>
+        };
+
+        const App = () => {
+            if (!Recharts) {
+                return (
+                    <div className="min-h-screen flex items-center justify-center bg-slate-900 text-white p-6 text-center">
+                        <div className="max-w-md bg-slate-800 p-8 rounded-xl border border-red-500/50">
+                            <Icons.Alert />
+                            <h2 className="text-xl font-bold mb-2">网络连接问题</h2>
+                            <p className="text-slate-400 mb-4">图表组件库加载失败，请刷新重试。</p>
+                            <button onClick={() => window.location.reload()} className="bg-blue-600 px-6 py-2 rounded-lg hover:bg-blue-500 transition-colors">刷新页面</button>
+                        </div>
+                    </div>
+                );
+            }
+
+            const [isAdminMode, setIsAdminMode] = useState(window.location.hash === '#admin');
+            const [rawData, setRawData] = useState([]);
+            const [statusMsg, setStatusMsg] = useState('');
+            const [inputText, setInputText] = useState('');
+            const [columnMapping, setColumnMapping] = useState({ groupName: 1, score1: 2, score2: 3, score3: 4, score4: 5 });
+
+            useEffect(() => {
+                if (!isFirebaseReady) return;
+                const unsubscribe = db.collection('scores').doc('current')
+                    .onSnapshot((doc) => {
+                        if (doc.exists) {
+                            const data = doc.data();
+                            if (data.records) {
+                                setRawData(data.records);
+                                if(!isAdminMode) console.log("收到实时更新:", data.records.length);
+                            }
+                        }
+                    }, (error) => {
+                        console.error("数据同步错误:", error);
+                        setStatusMsg("数据同步失败，请检查网络");
+                    });
+                return () => unsubscribe();
+            }, [isAdminMode]);
+
+            const handleSyncToCloud = async () => {
+                if (!isFirebaseReady || rawData.length === 0) return;
+                setStatusMsg("正在同步到云端...");
+                try {
+                    await db.collection('scores').doc('current').set({
+                        records: rawData,
+                        updatedAt: new Date().toISOString()
+                    });
+                    setStatusMsg("同步成功！全员已更新 ✅");
+                    setTimeout(() => setStatusMsg(''), 3000);
+                } catch (e) {
+                    console.error(e);
+                    setStatusMsg("同步失败 ❌");
+                }
+            };
+
+            const parseData = (text) => {
+                try {
+                    const rows = text.trim().split('\n');
+                    if (rows.length < 2) return [];
+                    const separator = text.indexOf('\t') > -1 ? '\t' : ',';
+                    const parsed = rows.map((row, index) => {
+                        if (index === 0) return null; 
+                        const cols = row.split(separator).map(c => c.trim());
+                        if (cols.length < 2) return null;
+                        const groupName = cols[columnMapping.groupName];
+                        const s1 = parseFloat(cols[columnMapping.score1]) || 0;
+                        const s2 = parseFloat(cols[columnMapping.score2]) || 0;
+                        const s3 = parseFloat(cols[columnMapping.score3]) || 0;
+                        const s4 = parseFloat(cols[columnMapping.score4]) || 0;
+                        return { id: index, group: groupName, s1, s2, s3, s4, total: s1 + s2 + s3 + s4 };
+                    }).filter(item => item !== null && item.group);
+                    setRawData(parsed);
+                } catch (e) { console.error(e); }
+            };
+
+            useEffect(() => { if(inputText) parseData(inputText); }, [inputText, columnMapping]);
+
+            const leaderboard = useMemo(() => {
+                const groups = {};
+                rawData.forEach(record => {
+                    const name = record.group;
+                    if (!groups[name]) groups[name] = { name, count: 0, totalSum: 0, s1Sum: 0, s2Sum: 0, s3Sum: 0, s4Sum: 0 };
+                    groups[name].count += 1;
+                    groups[name].totalSum += record.total;
+                    groups[name].s1Sum += record.s1;
+                    groups[name].s2Sum += record.s2;
+                    groups[name].s3Sum += record.s3;
+                    groups[name].s4Sum += record.s4;
+                });
+                return Object.values(groups).map(g => ({
+                    name: g.name,
+                    score: (g.totalSum / g.count).toFixed(2),
+                    s1: (g.s1Sum / g.count).toFixed(1),
+                    s2: (g.s2Sum / g.count).toFixed(1),
+                    s3: (g.s3Sum / g.count).toFixed(1),
+                    s4: (g.s4Sum / g.count).toFixed(1),
+                    voteCount: g.count
+                })).sort((a, b) => b.score - a.score);
+            }, [rawData]);
+
+            if (!isFirebaseReady) return <div className="text-white text-center p-10">初始化数据库中...</div>;
+
+            return (
+                <div className="min-h-screen bg-slate-900 text-white font-sans pb-10">
+                    <nav className="bg-slate-800 border-b border-slate-700 sticky top-0 z-50 px-4 h-14 flex items-center justify-between shadow-lg">
+                        <div className="font-bold text-lg bg-gradient-to-r from-blue-400 to-purple-400 bg-clip-text text-transparent">🏆 实时评分看板</div>
+                        {isAdminMode ? <span className="text-xs bg-red-600 px-2 py-1 rounded text-white font-bold animate-pulse">管理员模式</span> : <span className="text-xs text-green-400 flex items-center"><span className="w-2 h-2 bg-green-500 rounded-full mr-1 animate-pulse"></span> 实时同步中</span>}
+                    </nav>
+                    <main className="max-w-2xl mx-auto p-4">
+                        {leaderboard.length > 0 && (
+                            <div className="bg-gradient-to-br from-yellow-600/20 to-orange-600/20 border border-yellow-500/50 rounded-2xl p-6 text-center mb-6 relative overflow-hidden animate-fade-in">
+                                <Icons.Trophy />
+                                <div className="text-sm text-yellow-500 uppercase tracking-widest mb-1">Current Leader</div>
+                                <div className="text-4xl font-bold text-white mb-2">{leaderboard[0].name}</div>
+                                <div className="text-3xl text-yellow-400 font-mono font-bold">{leaderboard[0].score} <span className="text-sm text-white/50">分</span></div>
+                            </div>
+                        )}
+                        <div className="space-y-3 animate-fade-in">
+                            {leaderboard.map((item, idx) => (
+                                <div key={idx} className="bg-slate-800/80 backdrop-blur border border-slate-700 rounded-xl p-4 flex items-center justify-between shadow-md transition-all hover:bg-slate-700">
+                                    <div className="flex items-center space-x-4">
+                                        <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm ${idx === 0 ? 'bg-yellow-500 text-black' : idx === 1 ? 'bg-slate-300 text-black' : idx === 2 ? 'bg-orange-700 text-white' : 'bg-slate-700 text-slate-400'}`}>{idx + 1}</div>
+                                        <div>
+                                            <div className="font-bold text-lg">{item.name}</div>
+                                            <div className="text-xs text-slate-400 flex space-x-2">
+                                                <span>内容 {item.s1}</span><span className="w-px h-3 bg-slate-600"></span><span>表达 {item.s2}</span><span className="w-px h-3 bg-slate-600"></span><span>票数 {item.voteCount}</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <div className="text-right"><div className="text-2xl font-bold text-blue-400">{item.score}</div></div>
+                                </div>
+                            ))}
+                            {leaderboard.length === 0 && <div className="text-center text-slate-500 py-10">暂无评分数据，等待管理员录入...</div>}
+                        </div>
+                        {isAdminMode && (
+                            <div className="mt-12 pt-8 border-t border-slate-700 animate-fade-in">
+                                <h3 className="font-bold mb-4 flex items-center text-slate-300"><Icons.Lock /> 管理员控制台</h3>
+                                <div className="bg-slate-800 p-4 rounded-xl border border-slate-600">
+                                    <textarea value={inputText} onChange={(e) => setInputText(e.target.value)} className="w-full h-32 bg-slate-900 border border-slate-700 rounded-lg p-3 text-xs font-mono text-slate-300 mb-4 focus:ring-2 focus:ring-blue-500 outline-none" placeholder="在此处粘贴 Excel 数据..."></textarea>
+                                    <button onClick={handleSyncToCloud} className="w-full bg-blue-600 hover:bg-blue-500 text-white py-3 rounded-lg font-bold flex items-center justify-center transition-all active:scale-95"><Icons.Cloud /> 同步数据到大屏 ({rawData.length} 条)</button>
+                                    {statusMsg && <div className="mt-2 text-center text-sm text-green-400">{statusMsg}</div>}
+                                </div>
+                                <div className="mt-4 text-xs text-slate-500 text-center">同学访问链接: <span className="text-blue-400 select-all">{window.location.href.split('#')[0]}</span></div>
+                            </div>
+                        )}
+                    </main>
+                </div>
+            );
+        };
+
+        const root = ReactDOM.createRoot(document.getElementById('root'));
+        root.render(<App />);
+    </script>
+</body>
+</html>
